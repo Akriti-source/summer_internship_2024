@@ -1,0 +1,170 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+from scipy.signal import periodogram
+
+# Constants
+kB = 1.380649e-23  # Boltzmann constant in J/K
+T = 298  # Temperature in Kelvin
+F = 1e-11 # Magnetic force in Newtons
+Lext =  4.9e-6 # Extension of the tether in meters
+R = 1e-6  # Radius of the bead in meters
+Lp = 50e-9  # Persistence length in meters
+L0 = 7e-6 # Contour length in meters
+D = 1e-12  # Diffusion constant in m^2/s
+gamma = kB * T / D  # Friction coefficient
+dt = 0.005e-3  # Time step in seconds (0.005 ms or 5 microseconds)
+num_steps = 1000000  # Number of simulation steps
+capture_interval = 0.001  # Camera capture interval in seconds
+capture_steps = int(capture_interval / dt)  # Number of steps between captures
+k_tether = 0.6e-3  # Stiffness constant in N/m
+kz = (kB * T / (2 * Lp * L0)) * (2 + (1 / (1 - (Lext / L0))**3))
+kx=F/Lext
+ky= F/Lext+R
+
+x = np.zeros(num_steps)
+y = np.zeros(num_steps)
+z = np.zeros(num_steps)
+
+captured_x = []
+captured_y = []
+captured_z = []
+
+# Simulate motion
+for i in range(1, num_steps):
+    # Langevin force (random displacement) in each direction
+    dxLangevin = np.sqrt((kB*T)/kx) * np.random.randn()
+    dyLangevin = np.sqrt((kB*T)/ky) * np.random.randn()
+    dzLangevin = np.sqrt((kB*T)/kz) * np.random.randn()
+    #kz = (kB * T / (2 * Lp * L0)) * (2 + (1 / (1 - (Lext / L0))**3))
+   #force= (F*np.sqrt(2*D*dt))/Lext
+   # Eq of motions
+    x[i] = x[i-1] + (F / Lext) * (D * -x[i-1] * dt / (kB * T))  - k_tether * x[i-1] * dt / gamma + dxLangevin
+    y[i] = y[i-1] + (F / (Lext + R)) * (D * -y[i-1] * dt / (kB * T)) - k_tether * y[i-1] * dt / gamma   + dyLangevin
+    z[i] = z[i-1] + kz * (D * -z[i-1] * dt )/ (kB*T)  - k_tether * z[i-1] * dt / gamma + dzLangevin
+
+    # Capture positions at intervals specified by the camera
+    if i % capture_steps == 0:
+        captured_x.append(x[i])
+        captured_y.append(y[i])
+        captured_z.append(z[i])
+
+
+captured_x = np.array(captured_x)
+captured_y = np.array(captured_y)
+captured_z = np.array(captured_z)
+
+# Saves the captured positions to a CSV file
+np.savetxt('captured_positions.csv', np.column_stack((captured_x, captured_y, captured_z)), delimiter=',', header='x,y,z', comments='')
+
+# Function to compute and fit PSD with a Lorentzian function
+def lorentzian(f, f0, gamma, A):
+    return 10 * gamma**2 / ((f - f0)**2 + gamma**2)
+
+def compute_and_fit_psd(data, dt):
+    # Compute the PSD using periodogram
+    f, Pxx = periodogram(data, fs=1/dt)
+    
+    popt, pcov = curve_fit(lorentzian, f, Pxx, p0=[0, 1, 1])
+    
+    return f, Pxx, popt
+
+f_x, Pxx_x, popt_x = compute_and_fit_psd(captured_x, capture_interval)
+f_y, Pxx_y, popt_y = compute_and_fit_psd(captured_y, capture_interval)
+f_z, Pxx_z, popt_z = compute_and_fit_psd(captured_z, capture_interval)
+
+np.savetxt('psd_data_x.csv', np.column_stack((f_x, Pxx_x)), delimiter=',', header='frequency,psd', comments='')
+np.savetxt('psd_data_y.csv', np.column_stack((f_y, Pxx_y)), delimiter=',', header='frequency,psd', comments='')
+np.savetxt('psd_data_z.csv', np.column_stack((f_z, Pxx_z)), delimiter=',', header='frequency,psd', comments='')
+
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 3, 1)
+plt.plot(captured_x)
+plt.title('Bead Position in x Direction')
+plt.xlabel('Capture Steps')
+plt.ylabel('Position (nm)')
+plt.savefig('position_x.png')
+
+plt.subplot(1, 3, 2)
+plt.plot(captured_y)
+plt.title('Bead Position in y Direction')
+plt.xlabel('Capture Steps')
+plt.ylabel('Position (nm)')
+plt.savefig('position_y.png')
+
+plt.subplot(1, 3, 3)
+plt.plot(captured_z)
+plt.title('Bead Position in z Direction')
+plt.xlabel('Capture Steps')
+plt.ylabel('Position (nm)')
+plt.savefig('position_z.png')
+
+plt.tight_layout()
+plt.savefig('positions.png')
+plt.show()
+
+plt.figure(figsize=(18, 6))
+
+plt.subplot(1, 3, 1)
+plt.loglog(f_x, Pxx_x, label='PSD')
+plt.loglog(f_x, lorentzian(f_x, *popt_x), label='Lorentzian fit')
+plt.title('PSD of x Position')
+plt.xlabel('Frequency (Hz)')
+plt.ylabel('PSD')
+plt.legend()
+plt.savefig('psd_x.png')
+
+plt.subplot(1, 3, 2)
+plt.loglog(f_y, Pxx_y, label='PSD')
+plt.loglog(f_y, lorentzian(f_y, *popt_y), label='Lorentzian fit')
+plt.title('PSD of y Position')
+plt.xlabel('Frequency (Hz)')
+plt.ylabel('PSD')
+plt.legend()
+plt.savefig('psd_y.png')
+
+plt.subplot(1, 3, 3)
+plt.loglog(f_z, Pxx_z, label='PSD')
+plt.loglog(f_z, lorentzian(f_z, *popt_z), label='Lorentzian fit')
+plt.title('PSD of z Position')
+plt.xlabel('Frequency (Hz)')
+plt.ylabel('PSD')
+plt.legend()
+plt.savefig('psd_z.png')
+
+plt.tight_layout()
+plt.savefig('psd.png')
+plt.show()
+
+variance_x = np.var(captured_x)
+variance_y = np.var(captured_y)
+variance_z = np.var(captured_z)
+
+rmsd_x = np.sqrt(np.mean(np.square(captured_x)))
+rmsd_y = np.sqrt(np.mean(np.square(captured_y)))
+rmsd_z = np.sqrt(np.mean(np.square(captured_z)))
+
+np.savetxt('variance_x.csv', [variance_x], delimiter=',', header='variance_x', comments='')
+np.savetxt('variance_y.csv', [variance_y], delimiter=',', header='variance_y', comments='')
+np.savetxt('variance_z.csv', [variance_z], delimiter=',', header='variance_z', comments='')
+
+np.savetxt('rmsd_x.csv', [rmsd_x], delimiter=',', header='rmsd_x', comments='')
+np.savetxt('rmsd_y.csv', [rmsd_y], delimiter=',', header='rmsd_y', comments='')
+np.savetxt('rmsd_z.csv', [rmsd_z], delimiter=',', header='rmsd_z', comments='')
+
+plt.figure(figsize=(12, 6))
+
+plt.subplot(1, 2, 1)
+plt.bar(['x', 'y', 'z'], [variance_x, variance_y, variance_z], color=['r', 'g', 'b'])
+plt.title('Variance of Bead Positions')
+plt.ylabel('Variance (nm^2)')
+
+plt.subplot(1, 2, 2)
+plt.bar(['x', 'y', 'z'], [rmsd_x, rmsd_y, rmsd_z], color=['r', 'g', 'b'])
+plt.title('RMSD of Bead Positions')
+plt.ylabel('RMSD (nm)')
+
+plt.tight_layout()
+plt.savefig('variance_rmsd.png')
+plt.show()
